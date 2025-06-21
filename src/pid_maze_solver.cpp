@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <sensor_msgs/msg/laser_scan.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <vector>
@@ -19,6 +20,9 @@ public:
             "/odometry/filtered", 10,
             std::bind(&PIDMazeSolver::odomCallback, this, std::placeholders::_1));
 
+        scan_sub = this->create_subscription<sensor_msgs::msg::LaserScan>(
+            "/scan", 10, std::bind(&PIDMazeSolver::scanCallback, this, std::placeholders::_1));
+
         timer_ = this->create_wall_timer(
             std::chrono::milliseconds(100),
             std::bind(&PIDMazeSolver::controlLoop, this));
@@ -36,6 +40,9 @@ private:
 
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr vel_pub;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub;
+    rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub;
+    bool wall_too_close = false;
+
     rclcpp::TimerBase::SharedPtr timer_;
 
     std::vector<Goal> relative_goals;
@@ -105,6 +112,19 @@ private:
         if (!initialized) {
             RCLCPP_INFO(this->get_logger(), "Initial pose: (%.3f, %.3f), yaw: %.3f", current_x, current_y, current_yaw);
             initialized = true;
+        }
+    }
+    void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
+        // Check front sector (e.g., -15 to +15 degrees)
+        int start_idx = static_cast<int>((-15.0 - msg->angle_min * 180.0 / M_PI) / (msg->angle_increment * 180.0 / M_PI));
+        int end_idx = static_cast<int>((15.0 - msg->angle_min * 180.0 / M_PI) / (msg->angle_increment * 180.0 / M_PI));
+
+        wall_too_close = false;
+        for (int i = std::max(start_idx, 0); i < std::min(end_idx, static_cast<int>(msg->ranges.size())); ++i) {
+            if (msg->ranges[i] < 0.4) {  // 40 cm threshold
+                wall_too_close = true;
+                break;
+            }
         }
     }
 
@@ -240,6 +260,12 @@ private:
             prev_error_x = error_x;
             prev_error_y = error_y;
         }
+        // if (wall_too_close) {
+        //     RCLCPP_WARN(this->get_logger(), "Wall too close! Stopping.");
+        //     geometry_msgs::msg::Twist stop;
+        //     vel_pub->publish(stop);
+        //     return;
+        // }
     }
 };
 
