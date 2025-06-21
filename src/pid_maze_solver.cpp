@@ -112,7 +112,12 @@ private:
         double wz = dphi;
         double vx = cos_phi * dx + sin_phi * dy;
         double vy = -sin_phi * dx + cos_phi * dy;
-        RCLCPP_INFO(this->get_logger(), "velocity2twist: %.2f , %.2f , %.2f ", wz, vx, vy);
+
+
+
+        RCLCPP_INFO(this->get_logger(), 
+        "velocity2twist | yaw: %.3f rad | input dx=%.3f dy=%.3f | output vx=%.3f vy=%.3f wz=%.3f",
+        current_yaw, dx, dy, vx, vy, wz);
         return {wz, vx, vy};
     }
 
@@ -152,8 +157,14 @@ private:
         if (phase == Phase::MOVING) {
             double cos_phi = std::cos(start_yaw + goal.theta);
             double sin_phi = std::sin(start_yaw + goal.theta);
-            double target_x = start_x + cos_phi * goal.x - sin_phi * goal.y;
-            double target_y = start_y + sin_phi * goal.x + cos_phi * goal.y;
+            // double target_x = start_x + cos_phi * goal.x - sin_phi * goal.y;
+            // double target_y = start_y + sin_phi * goal.x + cos_phi * goal.y;
+            double target_x = start_x + goal.x;
+            double target_y = start_y + goal.y;
+
+            // double target_x = goal.x;
+            // double target_y = goal.y;
+
 
             double error_x = target_x - current_x;
             double error_y = target_y - current_y;
@@ -173,10 +184,14 @@ private:
             geometry_msgs::msg::Twist vel;
             vel.linear.x = vx;
             vel.linear.y = vy;
+
             vel.angular.z = wz;
             vel_pub->publish(vel);
 
             RCLCPP_INFO(this->get_logger(), "Published velocity: linear.x = %.3f, linear.y = %.3f", vx, vy);
+            double target_yaw = start_yaw + goal.theta;
+            RCLCPP_INFO(this->get_logger(), "Yaw Info | target_yaw: %.3f, start_yaw: %.3f, goal.theta: %.3f",
+            target_yaw, start_yaw, goal.theta);
 
             if (distance < goal_tolerance) {
                 RCLCPP_INFO(this->get_logger(), "Goal #%zu reached", current_goal_index);
