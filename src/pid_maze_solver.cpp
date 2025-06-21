@@ -51,10 +51,18 @@ private:
     double prev_error_x = 0.0, integral_x = 0.0;
     double prev_error_y = 0.0, integral_y = 0.0;
 
-    // PID gains
+    // PID gains for move
     float kp = 0.5;
     float ki = 0.01;
     float kd = 0.08;
+
+    // PID variables for turning
+    double prev_yaw_error = 0.0;
+    double integral_yaw = 0.0;
+
+    float kp_turn = 1.2;
+    float ki_turn = 0.0;
+    float kd_turn = 0.1;
 
     // float max_linear_speed = 0.5;
     double max_linear_speed = 0.5;
@@ -70,9 +78,9 @@ private:
             {0.5, 0.0, 1.57},
             {0.0, 0.45, 1.57},
             {0.4, 0.0, 0.0},
-            {0.0, 0.5, 0.0},
+            {0.0, 0.55, 0.0},
             {0.6, 0.0, 0.0},
-            {0.0, 0.9, 0.0},
+            {0.0, 0.85, 0.0},
             {-0.5, 0.0, 1.57},
             {0.0, -0.3, 0.0},
             {-0.4, 0.0, 0.0},
@@ -115,9 +123,9 @@ private:
 
 
 
-        RCLCPP_INFO(this->get_logger(), 
-        "velocity2twist | yaw: %.3f rad | input dx=%.3f dy=%.3f | output vx=%.3f vy=%.3f wz=%.3f",
-        current_yaw, dx, dy, vx, vy, wz);
+        // RCLCPP_INFO(this->get_logger(), 
+        // "velocity2twist | yaw: %.3f rad | input dx=%.3f dy=%.3f | output vx=%.3f vy=%.3f wz=%.3f",
+        // current_yaw, dx, dy, vx, vy, wz);
         return {wz, vx, vy};
     }
 
@@ -142,21 +150,36 @@ private:
             double target_yaw = normalizeAngle(start_yaw + goal.theta);
             double yaw_error = normalizeAngle(target_yaw - current_yaw);
 
+            // PID for turning
+            integral_yaw += yaw_error;
+            double derivative = (yaw_error - prev_yaw_error) / 0.1;  // assuming 100ms loop
+            double angular_z = kp_turn * yaw_error + ki_turn * integral_yaw + kd_turn * derivative;
+            angular_z = std::clamp(angular_z, -0.6, 0.6);
+
             geometry_msgs::msg::Twist twist;
             if (std::fabs(yaw_error) > yaw_tolerance) {
-                twist.angular.z = (yaw_error > 0) ? 0.3 : -0.3;
+                twist.angular.z = angular_z;
                 vel_pub->publish(twist);
+                prev_yaw_error = yaw_error;
+
+                // RCLCPP_INFO(this->get_logger(),
+                //     "Turning PID | error=%.3f, integral=%.3f, derivative=%.3f, angular_z=%.3f",
+                //     yaw_error, integral_yaw, derivative, angular_z);
                 return;
             }
 
             RCLCPP_INFO(this->get_logger(), "Turn complete. Starting linear motion.");
+            integral_yaw = 0.0;
+            prev_yaw_error = 0.0;
+
             phase = Phase::MOVING;
             return;
         }
 
+
         if (phase == Phase::MOVING) {
-            double cos_phi = std::cos(start_yaw + goal.theta);
-            double sin_phi = std::sin(start_yaw + goal.theta);
+            // double cos_phi = std::cos(start_yaw + goal.theta);
+            // double sin_phi = std::sin(start_yaw + goal.theta);
             // double target_x = start_x + cos_phi * goal.x - sin_phi * goal.y;
             // double target_y = start_y + sin_phi * goal.x + cos_phi * goal.y;
             double target_x = start_x + goal.x;
@@ -189,9 +212,9 @@ private:
             vel_pub->publish(vel);
 
             RCLCPP_INFO(this->get_logger(), "Published velocity: linear.x = %.3f, linear.y = %.3f", vx, vy);
-            double target_yaw = start_yaw + goal.theta;
-            RCLCPP_INFO(this->get_logger(), "Yaw Info | target_yaw: %.3f, start_yaw: %.3f, goal.theta: %.3f",
-            target_yaw, start_yaw, goal.theta);
+            // double target_yaw = start_yaw + goal.theta;
+            // RCLCPP_INFO(this->get_logger(), "Yaw Info | target_yaw: %.3f, start_yaw: %.3f, goal.theta: %.3f",
+            // target_yaw, start_yaw, goal.theta);
 
             if (distance < goal_tolerance) {
                 RCLCPP_INFO(this->get_logger(), "Goal #%zu reached", current_goal_index);
