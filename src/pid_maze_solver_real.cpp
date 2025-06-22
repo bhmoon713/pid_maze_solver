@@ -43,11 +43,6 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub;
     bool wall_too_close = false;
 
-    float front_range_ = std::numeric_limits<float>::infinity();
-    float left_range_  = std::numeric_limits<float>::infinity();
-    float right_range_ = std::numeric_limits<float>::infinity();
-    float back_range_  = std::numeric_limits<float>::infinity();
-
     rclcpp::TimerBase::SharedPtr timer_;
 
     std::vector<Goal> relative_goals;
@@ -84,20 +79,20 @@ private:
     void selectWaypoints() {
         RCLCPP_INFO(this->get_logger(), "Simulation waypoints loaded.");
         relative_goals = {
-            {0.35, 0.0, 0.0},
-            {0.2, -0.2, -0.785},
-            {0.0, -1.1, -0.785},
-            {0.5, 0.0, 1.57},
-            {0.0, 0.45, 1.57},
-            {0.4, 0.0, 0.0},
-            {0.0, 0.55, 0.0},
             {0.6, 0.0, 0.0},
-            {0.0, 0.85, 0.0},
-            {-0.5, 0.0, 1.57},
-            {0.0, -0.3, 0.0},
-            {-0.45, 0.0, 0.0},
-            {-0.3, 0.3, -0.785},
-            {-0.6, 0.0, 0.785},
+            {0.4, 0.0, 0.0},
+            {0.0, -0.2, -1.57},
+            {-0.2, 0.0, 0.0},
+            {0.0, -0.2, 0.0},
+            {0.2, 0.0, 0.0},
+            {0.0, -0.2, 0.0},
+            {-0.2, 0.0, 0.0},
+            {0.0, -0.2, 0.0},
+            {-0.2, 0.0, -1.57},
+            {0.0, 0.4, -1.57},
+            {-0.2, 0.0, 1.57},
+            {0.0, 0.2, -1.57},
+            {-0.2, 0.0, 1.57},
             {0.0, 0.0, 3.145}
         };
     }
@@ -120,28 +115,18 @@ private:
         }
     }
     void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
-        int total_ranges = static_cast<int>(msg->ranges.size());
+        // Check front sector (e.g., -15 to +15 degrees)
+        int start_idx = static_cast<int>((-15.0 - msg->angle_min * 180.0 / M_PI) / (msg->angle_increment * 180.0 / M_PI));
+        int end_idx = static_cast<int>((15.0 - msg->angle_min * 180.0 / M_PI) / (msg->angle_increment * 180.0 / M_PI));
 
-        // Compute index helpers
-        auto angleToIndex = [&](float angle_deg) -> int {
-            float angle_rad = angle_deg * M_PI / 180.0;
-            int index = static_cast<int>((angle_rad - msg->angle_min) / msg->angle_increment);
-            return std::clamp(index, 0, total_ranges - 1);
-        };
-
-        int idx_front = angleToIndex(0.0);
-        int idx_left  = angleToIndex(90.0);
-        int idx_right = angleToIndex(-90.0);
-        int idx_back  = angleToIndex(180.0);
-
-        front_range_ = msg->ranges[idx_front];
-        left_range_  = msg->ranges[idx_left];
-        right_range_ = msg->ranges[idx_right];
-        back_range_  = msg->ranges[idx_back];
-
-        wall_too_close = (front_range_ < 0.4);  // retain if needed elsewhere
+        wall_too_close = false;
+        for (int i = std::max(start_idx, 0); i < std::min(end_idx, static_cast<int>(msg->ranges.size())); ++i) {
+            if (msg->ranges[i] < 0.4) {  // 40 cm threshold
+                wall_too_close = true;
+                break;
+            }
+        }
     }
-
 
     double normalizeAngle(double angle) {
         while (angle > M_PI) angle -= 2 * M_PI;
@@ -213,8 +198,16 @@ private:
 
 
         if (phase == Phase::MOVING) {
+            // double cos_phi = std::cos(start_yaw + goal.theta);
+            // double sin_phi = std::sin(start_yaw + goal.theta);
+            // double target_x = start_x + cos_phi * goal.x - sin_phi * goal.y;
+            // double target_y = start_y + sin_phi * goal.x + cos_phi * goal.y;
             double target_x = start_x + goal.x;
             double target_y = start_y + goal.y;
+
+            // double target_x = goal.x;
+            // double target_y = goal.y;
+
 
             double error_x = target_x - current_x;
             double error_y = target_y - current_y;
@@ -234,25 +227,8 @@ private:
             geometry_msgs::msg::Twist vel;
             vel.linear.x = vx;
             vel.linear.y = vy;
+
             vel.angular.z = wz;
-
-            if (left_range_ < 0.17) {
-                RCLCPP_WARN(this->get_logger(), "Left wall too close! Shifting right.");
-                vel.linear.y -= 0.1;  // shift right
-            }
-            if (front_range_ < 0.17) {
-                RCLCPP_WARN(this->get_logger(), "Front wall too close! Backing up.");
-                vel.linear.x -= 0.1;  // move backward
-            }
-            if (right_range_ < 0.17) {
-                RCLCPP_WARN(this->get_logger(), "Right wall too close! Shifting left.");
-                vel.linear.y += 0.1;  // move left
-            }
-            if (back_range_ < 0.17) {
-                RCLCPP_WARN(this->get_logger(), "Back wall too close! Moving forward.");
-                vel.linear.x += 0.1;
-            }
-
             vel_pub->publish(vel);
 
             RCLCPP_INFO(this->get_logger(), "Published velocity: linear.x = %.3f, linear.y = %.3f", vx, vy);

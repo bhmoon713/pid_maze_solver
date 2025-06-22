@@ -30,12 +30,16 @@ endif()
 add_executable(pid_maze_solver src/pid_maze_solver.cpp)
 ament_target_dependencies(pid_maze_solver rclcpp geometry_msgs nav_msgs sensor_msgs tf2 tf2_ros tf2_geometry_msgs )
 
-add_executable(reference src/reference.cpp)
-ament_target_dependencies(reference rclcpp geometry_msgs nav_msgs sensor_msgs tf2 tf2_ros tf2_geometry_msgs )
+add_executable(pid_maze_solver_real src/pid_maze_solver_real.cpp)
+ament_target_dependencies(pid_maze_solver_real rclcpp geometry_msgs nav_msgs sensor_msgs tf2 tf2_ros tf2_geometry_msgs )
+
+add_executable(laser_test src/laser_test.cpp)
+ament_target_dependencies(laser_test rclcpp sensor_msgs)
 
 install(TARGETS
    pid_maze_solver
-   reference
+   pid_maze_solver_real
+   laser_test
    DESTINATION lib/${PROJECT_NAME}
  )
 
