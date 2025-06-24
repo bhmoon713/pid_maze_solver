@@ -14,6 +14,7 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -28,10 +29,12 @@ if(BUILD_TESTING)
 endif()
 
 add_executable(pid_maze_solver src/pid_maze_solver.cpp)
-ament_target_dependencies(pid_maze_solver rclcpp geometry_msgs nav_msgs sensor_msgs tf2 tf2_ros tf2_geometry_msgs )
+ament_target_dependencies(pid_maze_solver rclcpp geometry_msgs nav_msgs sensor_msgs tf2 tf2_ros tf2_geometry_msgs yaml-cpp )
+target_link_libraries(pid_maze_solver yaml-cpp)
 
 add_executable(pid_maze_solver_real src/pid_maze_solver_real.cpp)
-ament_target_dependencies(pid_maze_solver_real rclcpp geometry_msgs nav_msgs sensor_msgs tf2 tf2_ros tf2_geometry_msgs )
+ament_target_dependencies(pid_maze_solver_real rclcpp geometry_msgs nav_msgs sensor_msgs tf2 tf2_ros tf2_geometry_msgs yaml-cpp )
+target_link_libraries(pid_maze_solver yaml-cpp)
 
 add_executable(laser_test src/laser_test.cpp)
 ament_target_dependencies(laser_test rclcpp sensor_msgs)
@@ -42,5 +45,7 @@ install(TARGETS
    laser_test
    DESTINATION lib/${PROJECT_NAME}
  )
+
+ install(DIRECTORY waypoints DESTINATION share/${PROJECT_NAME}/)
 
 ament_package()
