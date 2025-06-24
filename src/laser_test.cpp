@@ -18,7 +18,8 @@ private:
     const auto &ranges = msg->ranges;
 
     // Indices based on CCW sweep starting from front
-    std::vector<int> indices = {0, 230, 460, 690, 918};
+    // std::vector<int> indices = {0, 230, 460, 690, 918};  //sim
+    std::vector<int> indices = {0, 179,359, 539, 719};  //real robot
     std::vector<std::string> labels = {
       "Front", "Left", "Back", "Right", "Front (end)"
     };

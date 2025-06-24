@@ -221,10 +221,10 @@ private:
             vel.linear.y = vy;
             vel.angular.z = wz;
 
-            if (left_range_ < 0.17) vel.linear.y -= 0.05;
-            if (right_range_ < 0.17) vel.linear.y += 0.05;
-            if (front_range_ < 0.17) vel.linear.x -= 0.05;
-            if (back_range_ < 0.17) vel.linear.x += 0.05;
+            if (left_range_ < 0.2) vel.linear.y -= 0.05;
+            if (right_range_ < 0.2) vel.linear.y += 0.05;
+            if (front_range_ < 0.2) vel.linear.x -= 0.05;
+            if (back_range_ < 0.2) vel.linear.x += 0.05;
 
             vel_pub->publish(vel);
 
