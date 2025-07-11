@@ -94,18 +94,20 @@ private:
     }
 
     void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
-        int total_ranges = static_cast<int>(msg->ranges.size());
+        const auto &ranges = msg->ranges;
 
-        auto angleToIndex = [&](float angle_deg) -> int {
-            float angle_rad = angle_deg * M_PI / 180.0;
-            int index = static_cast<int>((angle_rad - msg->angle_min) / msg->angle_increment);
-            return std::clamp(index, 0, total_ranges - 1);
-        };
+        // Fixed indices based on real robot LaserScan layout
+        int idx_front = 0;
+        int idx_left = 179;
+        int idx_back = 359;
+        int idx_right = 539;
+        int idx_front_end = 719;
 
-        front_range_ = msg->ranges[angleToIndex(0.0)];
-        left_range_  = msg->ranges[angleToIndex(90.0)];
-        right_range_ = msg->ranges[angleToIndex(-90.0)];
-        back_range_  = msg->ranges[angleToIndex(180.0)];
+        // Use average of front (start and end) for better stability
+        front_range_ = (ranges[idx_front] + ranges[idx_front_end]) / 2.0;
+        left_range_  = ranges[idx_left];
+        back_range_  = ranges[idx_back];
+        right_range_ = ranges[idx_right];
 
         wall_too_close = (front_range_ < 0.4);
     }
@@ -221,10 +223,10 @@ private:
             vel.linear.y = vy;
             vel.angular.z = wz;
 
-            if (left_range_ < 0.2) vel.linear.y -= 0.05;
-            if (right_range_ < 0.2) vel.linear.y += 0.05;
-            if (front_range_ < 0.2) vel.linear.x -= 0.05;
-            if (back_range_ < 0.2) vel.linear.x += 0.05;
+            // if (left_range_ < 0.2) vel.linear.y -= 0.05;
+            // if (right_range_ < 0.2) vel.linear.y += 0.05;
+            // if (front_range_ < 0.2) vel.linear.x -= 0.05;
+            // if (back_range_ < 0.2) vel.linear.x += 0.05;
 
             vel_pub->publish(vel);
 
