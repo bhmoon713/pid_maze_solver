@@ -151,6 +151,64 @@ private:
         return waypoints;
     }
 
+    std::vector<std::vector<double>> readWaypointsYAML() {
+    std::vector<std::vector<double>> waypoints;
+
+    // Get the package's share directory and append the YAML file path
+    std::string package_share_directory =
+        ament_index_cpp::get_package_share_directory(
+            "pid_maze_solver"); // Replace with your package name
+
+    std::string waypoint_file_name = "";
+
+    switch (scene_number_) {
+    case 1: // Simulation
+      waypoint_file_name = "waypoints_sim.yaml";
+      break;
+
+    case 2: // CyberWorld
+      waypoint_file_name = "waypoints_real.yaml";
+      break;
+    
+    case 3: // Simulation Reverse
+      waypoint_file_name = "reverse_waypoints_sim.yaml";
+      break;
+
+    case 4: // CyberWorld Reverse
+      waypoint_file_name = "reverse_waypoints_real.yaml";
+      break;
+
+    default:
+      RCLCPP_ERROR(this->get_logger(), "Invalid Scene Number: %d",
+                   scene_number_);
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Waypoint file loaded: %s",
+                waypoint_file_name.c_str());
+
+    std::string yaml_file_path =
+        package_share_directory + "/waypoints/" + waypoint_file_name;
+
+    // Read points from the YAML file
+    try {
+      YAML::Node config = YAML::LoadFile(yaml_file_path);
+
+        if (config["waypoints"]) {
+            for (const auto& wp : config["waypoints"]) {
+                waypoints.push_back({wp[0].as<float>(), wp[1].as<float>(), wp[2].as<float>()});
+            }
+        }
+
+
+    } catch (const YAML::Exception &e) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to load YAML file: %s",
+                   e.what());
+    }
+
+    return waypoints;
+  }
+
+
     double normalizeAngle(double angle) {
         while (angle > M_PI) angle -= 2 * M_PI;
         while (angle < -M_PI) angle += 2 * M_PI;
@@ -234,15 +292,20 @@ private:
                 RCLCPP_INFO(this->get_logger(), "Left too close");
             }
             if (right_range_ < 0.2) {
-                vel.linear.y += 0.04;
+                vel.linear.y += 0.05;
                 RCLCPP_INFO(this->get_logger(), "Right too close");
             }
 
             // Early stop if front obstacle is detected
             // Early stop if front obstacle is detected (except for waypoint 3)
-            std::set<std::size_t> skip_early_stop = {3, 5, 8};
-            if (skip_early_stop.count(current_goal_index) == 0 && front_range_ < 0.2) {
-                RCLCPP_WARN(this->get_logger(), "Front obstacle detected < 0.2m. Stopping early.");
+            std::set<std::size_t> skip_early_stop = {3, 5, 9, 11, 12};
+            float front_threshold = 0.25;
+            if (current_goal_index == 13) {
+                front_threshold = 0.2;  // Special case for waypoint 13
+            }
+
+            if (skip_early_stop.count(current_goal_index) == 0 && front_range_ < front_threshold) {
+                RCLCPP_WARN(this->get_logger(), "Front obstacle detected < %.2fm. Stopping early.", front_threshold);
                 geometry_msgs::msg::Twist stop;
                 vel_pub->publish(stop);
                 rclcpp::sleep_for(std::chrono::milliseconds(300));
@@ -250,6 +313,7 @@ private:
                 correction_counter_ = 0;
                 return;
             }
+
 
             vel_pub->publish(vel);
 
@@ -308,7 +372,7 @@ private:
                     float diff = right_up_avg_ - right_down_avg_;
                     if (std::fabs(diff) > tilt_threshold) {
                         float tilt_correction = std::clamp(-gain * diff, -0.1f, 0.1f);
-                        correction_vel.angular.z += -tilt_correction;
+                        correction_vel.angular.z += tilt_correction;
                         need_correction = true;
 
                         RCLCPP_INFO(this->get_logger(),
