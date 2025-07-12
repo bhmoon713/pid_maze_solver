@@ -75,6 +75,8 @@ private:
     float back_range_  = std::numeric_limits<float>::infinity();
     float left_up_avg_ = std::numeric_limits<float>::quiet_NaN();
     float left_down_avg_ = std::numeric_limits<float>::quiet_NaN();
+    float right_up_avg_ = std::numeric_limits<float>::quiet_NaN();
+    float right_down_avg_ = std::numeric_limits<float>::quiet_NaN();
     int correction_counter_ = 0;
 
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
@@ -123,6 +125,8 @@ private:
 
         left_down_avg_ = calc_avg(179, 224);
         left_up_avg_   = calc_avg(134, 179);
+        right_down_avg_ = calc_avg(484, 539);
+        right_up_avg_   = calc_avg(539, 584);
     }
 
     std::vector<Goal> readWaypointsYAML(int scene_number) {
@@ -234,9 +238,11 @@ private:
                 RCLCPP_INFO(this->get_logger(), "Right too close");
             }
 
-            // 🚨 Early stop if front obstacle is detected
-            if (front_range_ < 0.18) {
-                RCLCPP_WARN(this->get_logger(), "Front obstacle detected < 0.18m. Stopping early.");
+            // Early stop if front obstacle is detected
+            // Early stop if front obstacle is detected (except for waypoint 3)
+            std::set<std::size_t> skip_early_stop = {3, 5, 8};
+            if (skip_early_stop.count(current_goal_index) == 0 && front_range_ < 0.2) {
+                RCLCPP_WARN(this->get_logger(), "Front obstacle detected < 0.2m. Stopping early.");
                 geometry_msgs::msg::Twist stop;
                 vel_pub->publish(stop);
                 rclcpp::sleep_for(std::chrono::milliseconds(300));
@@ -279,22 +285,40 @@ private:
                 need_correction = true;
             }
 
-            // Left tilt correction based on left wall
-            if (std::isfinite(left_up_avg_) && std::isfinite(left_down_avg_)) {
-                float diff = left_up_avg_ - left_down_avg_;
-                float tilt_threshold = 0.015;  // 1.5 cm
-                float gain = 1.0;
+            // === Wall tilt correction based on closer side only ===
+            float tilt_threshold = 0.015;
+            float gain = 1.0;
 
-                if (std::fabs(diff) > tilt_threshold) {
-                    float tilt_correction = std::clamp(-gain * diff, -0.1f, 0.1f);  // negative = clockwise
-                    correction_vel.angular.z += -tilt_correction;
-                    need_correction = true;
+            // Use only the closer wall for tilt correction
+            if (left_range_ < right_range_) {
+                if (std::isfinite(left_up_avg_) && std::isfinite(left_down_avg_)) {
+                    float diff = left_up_avg_ - left_down_avg_;
+                    if (std::fabs(diff) > tilt_threshold) {
+                        float tilt_correction = std::clamp(-gain * diff, -0.1f, 0.1f);
+                        correction_vel.angular.z += -tilt_correction;
+                        need_correction = true;
 
-                    RCLCPP_INFO(this->get_logger(),
-                        "Wall tilt correction: left_up - left_down = %.3f → angular.z += %.3f",
-                        diff, tilt_correction);
+                        RCLCPP_INFO(this->get_logger(),
+                            "Left wall tilt correction (closer): diff=%.3f → angular.z += %.3f",
+                            diff, tilt_correction);
+                    }
+                }
+            } else if (right_range_ < left_range_) {
+                if (std::isfinite(right_up_avg_) && std::isfinite(right_down_avg_)) {
+                    float diff = right_up_avg_ - right_down_avg_;
+                    if (std::fabs(diff) > tilt_threshold) {
+                        float tilt_correction = std::clamp(-gain * diff, -0.1f, 0.1f);
+                        correction_vel.angular.z += -tilt_correction;
+                        need_correction = true;
+
+                        RCLCPP_INFO(this->get_logger(),
+                            "Right wall tilt correction (closer): diff=%.3f → angular.z += %.3f",
+                            diff, tilt_correction);
+                    }
                 }
             }
+
+
             if (need_correction) {
                 vel_pub->publish(correction_vel);
                 correction_counter_++;
