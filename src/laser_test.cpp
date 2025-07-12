@@ -2,6 +2,7 @@
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <vector>
 #include <string>
+#include <cmath>
 #include <iomanip>
 
 class LaserTestNode : public rclcpp::Node {
@@ -17,9 +18,7 @@ private:
   void laserCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
     const auto &ranges = msg->ranges;
 
-    // Indices based on CCW sweep starting from front
-    // std::vector<int> indices = {0, 230, 460, 690, 918};  //sim
-    std::vector<int> indices = {0, 179,359, 539, 719};  //real robot
+    std::vector<int> indices = {0, 179, 359, 539, 719};  // real robot
     std::vector<std::string> labels = {
       "Front", "Left", "Back", "Right", "Front (end)"
     };
@@ -49,6 +48,29 @@ private:
       }
     }
 
+    // === Additional average region calculations ===
+    auto calc_avg = [&](int start_idx, int end_idx) {
+      float sum = 0.0f;
+      int count = 0;
+      for (int i = start_idx; i <= end_idx && i < static_cast<int>(ranges.size()); ++i) {
+        if (std::isfinite(ranges[i])) {
+          sum += ranges[i];
+          count++;
+        }
+      }
+      return count > 0 ? sum / count : -1.0f;  // return -1 if no valid data
+    };
+
+    float right_up_avg = calc_avg(540, 629);
+    float right_down_avg = calc_avg(449, 538);
+    float left_down_avg = calc_avg(180, 269);
+    float left_up_avg = calc_avg(89, 178);
+
+    RCLCPP_INFO(this->get_logger(), "\n---- Region Averages ----");
+    RCLCPP_INFO(this->get_logger(), "Right Up Avg   [540, 629]  : %.3f m", right_up_avg);
+    RCLCPP_INFO(this->get_logger(), "Right Down Avg [449, 538] : %.3f m", right_down_avg);
+    RCLCPP_INFO(this->get_logger(), "Left Down Avg  [180, 269] : %.3f m", left_down_avg);
+    RCLCPP_INFO(this->get_logger(), "Left Up Avg    [89, 178] : %.3f m", left_up_avg);
     RCLCPP_INFO(this->get_logger(), "----------------------------\n");
   }
 

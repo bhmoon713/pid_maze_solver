@@ -16,7 +16,7 @@ class PIDMazeSolver : public rclcpp::Node {
 public:
     PIDMazeSolver(int scene_number)
         : Node("pid_maze_solver"), scene_number_(scene_number) {
-
+        
         relative_goals = readWaypointsYAML(scene_number_);
 
         vel_pub = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
@@ -40,7 +40,7 @@ private:
         float theta;
     };
 
-    enum class Phase { TURNING, MOVING, CORRECTING };
+    enum class Phase { TURNING, MOVING };
     Phase phase = Phase::TURNING;
 
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr vel_pub;
@@ -73,9 +73,7 @@ private:
     float left_range_  = std::numeric_limits<float>::infinity();
     float right_range_ = std::numeric_limits<float>::infinity();
     float back_range_  = std::numeric_limits<float>::infinity();
-    float left_up_avg_ = std::numeric_limits<float>::quiet_NaN();
-    float left_down_avg_ = std::numeric_limits<float>::quiet_NaN();
-    int correction_counter_ = 0;
+    bool wall_too_close = false;
 
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
         current_x = msg->pose.pose.position.x;
@@ -98,38 +96,36 @@ private:
     void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
         const auto &ranges = msg->ranges;
 
+        // Fixed indices based on real robot LaserScan layout
         int idx_front = 0;
         int idx_left = 179;
         int idx_back = 359;
         int idx_right = 539;
         int idx_front_end = 719;
 
+        // Use average of front (start and end) for better stability
         front_range_ = (ranges[idx_front] + ranges[idx_front_end]) / 2.0;
         left_range_  = ranges[idx_left];
         back_range_  = ranges[idx_back];
         right_range_ = ranges[idx_right];
 
-        auto calc_avg = [&](int start, int end) {
-            float sum = 0.0f;
-            int count = 0;
-            for (int i = start; i <= end && i < static_cast<int>(ranges.size()); ++i) {
-                if (std::isfinite(ranges[i])) {
-                    sum += ranges[i];
-                    count++;
-                }
-            }
-            return count > 0 ? sum / count : std::numeric_limits<float>::quiet_NaN();
-        };
-
-        left_down_avg_ = calc_avg(179, 224);
-        left_up_avg_   = calc_avg(134, 179);
+        wall_too_close = (front_range_ < 0.4);
     }
 
     std::vector<Goal> readWaypointsYAML(int scene_number) {
         std::vector<Goal> waypoints;
         std::string package_share_directory = ament_index_cpp::get_package_share_directory("pid_maze_solver");
 
-        std::string waypoint_file_name = scene_number == 1 ? "waypoints_sim.yaml" : "waypoints_real.yaml";
+        std::string waypoint_file_name;
+        if (scene_number == 1) {
+            waypoint_file_name = "waypoints_sim.yaml";
+        } else if (scene_number == 2) {
+            waypoint_file_name = "waypoints_real.yaml";
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "Invalid scene number: %d", scene_number);
+            return waypoints;
+        }
+
         std::string yaml_path = package_share_directory + "/waypoints/" + waypoint_file_name;
         RCLCPP_INFO(this->get_logger(), "Loading waypoints from: %s", yaml_path.c_str());
 
@@ -174,6 +170,7 @@ private:
             current_target = goal;
             goal_active = true;
             phase = Phase::TURNING;
+
             RCLCPP_INFO(this->get_logger(), "New goal #%zu: turn %.3f rad, then move Δx=%.3f, Δy=%.3f",
                         current_goal_index, goal.theta, goal.x, goal.y);
         }
@@ -197,6 +194,7 @@ private:
 
             integral_yaw = 0.0;
             prev_yaw_error = 0.0;
+            RCLCPP_INFO(this->get_logger(), "Turn complete. Starting linear motion.");
             phase = Phase::MOVING;
             return;
         }
@@ -225,116 +223,59 @@ private:
             vel.linear.y = vy;
             vel.angular.z = wz;
 
-            if (left_range_ < 0.2) {
-                vel.linear.y -= 0.05;
-                RCLCPP_INFO(this->get_logger(), "Left too close");
-            }
-            if (right_range_ < 0.2) {
-                vel.linear.y += 0.04;
-                RCLCPP_INFO(this->get_logger(), "Right too close");
-            }
-
-            // 🚨 Early stop if front obstacle is detected
-            if (front_range_ < 0.18) {
-                RCLCPP_WARN(this->get_logger(), "Front obstacle detected < 0.18m. Stopping early.");
-                geometry_msgs::msg::Twist stop;
-                vel_pub->publish(stop);
-                rclcpp::sleep_for(std::chrono::milliseconds(300));
-                phase = Phase::CORRECTING;
-                correction_counter_ = 0;
-                return;
-            }
+            // if (left_range_ < 0.2) {
+            //     vel.linear.y -= 0.05;
+            //     RCLCPP_INFO(this->get_logger(), "Left too close");
+            // }
+            // if (right_range_ < 0.2) {
+            //     vel.linear.y += 0.04;
+            //     RCLCPP_INFO(this->get_logger(), "Right too close");
+            // }
+            // if (front_range_ < 0.18) {
+            //     vel.linear.x -= 0.05;
+            //     RCLCPP_INFO(this->get_logger(), "Front too close");
+            // }
+            // if (back_range_ < 0.18) {
+            //     vel.linear.x += 0.05;
+            //     RCLCPP_INFO(this->get_logger(), "Back too close");
+            // }
 
             vel_pub->publish(vel);
 
             if (distance < goal_tolerance) {
+                RCLCPP_INFO(this->get_logger(), "Goal #%zu reached", current_goal_index);
                 geometry_msgs::msg::Twist stop;
                 vel_pub->publish(stop);
-                rclcpp::sleep_for(std::chrono::milliseconds(300));
-                phase = Phase::CORRECTING;
-                correction_counter_ = 0;
-                return;
+                rclcpp::sleep_for(std::chrono::milliseconds(500));
+
+                current_goal_index++;
+                goal_active = false;
+                integral_x = 0.0;
+                integral_y = 0.0;
+                prev_error_x = 0.0;
+                prev_error_y = 0.0;
+
+                if (current_goal_index >= relative_goals.size()) {
+                    vel_pub->publish(stop);
+                    timer_->cancel();
+                    rclcpp::shutdown();
+                }
             }
 
             prev_error_x = error_x;
             prev_error_y = error_y;
-            return;
-        }
-
-
-        if (phase == Phase::CORRECTING) {
-            geometry_msgs::msg::Twist correction_vel;
-            bool need_correction = false;
-
-            if (front_range_ < 0.16) {
-                correction_vel.linear.x -= 0.03;
-                need_correction = true;
-            }
-            if (left_range_ < 0.2) {
-                correction_vel.linear.y -= 0.03;
-                need_correction = true;
-            }
-            if (right_range_ < 0.2) {
-                correction_vel.linear.y += 0.03;
-                need_correction = true;
-            }
-
-            // Left tilt correction based on left wall
-            if (std::isfinite(left_up_avg_) && std::isfinite(left_down_avg_)) {
-                float diff = left_up_avg_ - left_down_avg_;
-                float tilt_threshold = 0.015;  // 1.5 cm
-                float gain = 1.0;
-
-                if (std::fabs(diff) > tilt_threshold) {
-                    float tilt_correction = std::clamp(-gain * diff, -0.1f, 0.1f);  // negative = clockwise
-                    correction_vel.angular.z += -tilt_correction;
-                    need_correction = true;
-
-                    RCLCPP_INFO(this->get_logger(),
-                        "Wall tilt correction: left_up - left_down = %.3f → angular.z += %.3f",
-                        diff, tilt_correction);
-                }
-            }
-            if (need_correction) {
-                vel_pub->publish(correction_vel);
-                correction_counter_++;
-                if (correction_counter_ > 2000) {
-                    RCLCPP_WARN(this->get_logger(), "Correction timeout. Moving on.");
-                    phase = Phase::TURNING;
-                    goal_active = false;
-                    current_goal_index++;
-                }
-                return;
-            }
-
-            geometry_msgs::msg::Twist stop;
-            vel_pub->publish(stop);
-            rclcpp::sleep_for(std::chrono::milliseconds(300));
-
-            current_goal_index++;
-            goal_active = false;
-            integral_x = 0.0;
-            integral_y = 0.0;
-            prev_error_x = 0.0;
-            prev_error_y = 0.0;
-
-            if (current_goal_index >= relative_goals.size()) {
-                vel_pub->publish(stop);
-                timer_->cancel();
-                rclcpp::shutdown();
-            } else {
-                phase = Phase::TURNING;
-            }
         }
     }
 };
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
+
     if (argc < 2) {
         RCLCPP_ERROR(rclcpp::get_logger("pid_maze_solver"), "Usage: ros2 run pid_maze_solver pid_maze_solver <scene_number>");
         return 1;
     }
+
     int scene_number = std::atoi(argv[1]);
     rclcpp::spin(std::make_shared<PIDMazeSolver>(scene_number));
     rclcpp::shutdown();
