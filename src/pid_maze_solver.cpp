@@ -298,7 +298,19 @@ private:
 
             // Early stop if front obstacle is detected
             // Early stop if front obstacle is detected (except for waypoint 3)
-            std::set<std::size_t> skip_early_stop = {3, 5, 9, 11, 12};
+            std::set<std::size_t> skip_early_stop;
+
+            switch (scene_number_) {
+                case 2:
+                    skip_early_stop = {3, 5, 9, 11, 12};
+                    break;
+                case 4:
+                    skip_early_stop = {1, 2, 3, 4, 5, 7, 9, 11, 13};
+                    break;
+                default:
+                    skip_early_stop.clear();
+                    break;
+            }
             float front_threshold = 0.25;
             if (current_goal_index == 13) {
                 front_threshold = 0.2;  // Special case for waypoint 13
