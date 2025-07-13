@@ -315,11 +315,11 @@ std::vector<Goal> readWaypointsYAML(int scene_number) {
                 correction_vel.linear.x -= 0.03;
                 need_correction = true;
             }
-            if (left_range_ < 0.2) {
+            if (left_range_ < 0.19) {
                 correction_vel.linear.y -= 0.03;
                 need_correction = true;
             }
-            if (right_range_ < 0.2) {
+            if (right_range_ < 0.19) {
                 correction_vel.linear.y += 0.03;
                 need_correction = true;
             }
