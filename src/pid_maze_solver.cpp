@@ -287,11 +287,11 @@ private:
             vel.linear.y = vy;
             vel.angular.z = wz;
 
-            if (left_range_ < 0.2) {
+            if (left_range_ < 0.19) {
                 vel.linear.y -= 0.05;
                 RCLCPP_INFO(this->get_logger(), "Left too close");
             }
-            if (right_range_ < 0.2) {
+            if (right_range_ < 0.19) {
                 vel.linear.y += 0.05;
                 RCLCPP_INFO(this->get_logger(), "Right too close");
             }
