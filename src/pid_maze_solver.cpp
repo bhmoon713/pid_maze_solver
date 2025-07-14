@@ -79,6 +79,9 @@ private:
     float right_down_avg_ = std::numeric_limits<float>::quiet_NaN();
     int correction_counter_ = 0;
 
+    double initial_yaw = 0.0;
+
+
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
         current_x = msg->pose.pose.position.x;
         current_y = msg->pose.pose.position.y;
@@ -88,13 +91,22 @@ private:
             msg->pose.pose.orientation.y,
             msg->pose.pose.orientation.z,
             msg->pose.pose.orientation.w);
-        double roll, pitch;
-        tf2::Matrix3x3(q).getRPY(roll, pitch, current_yaw);
+        double roll, pitch, raw_yaw;
+        tf2::Matrix3x3(q).getRPY(roll, pitch, raw_yaw);
 
+        // Capture the first yaw reading as the zero reference
         if (!initialized) {
-            RCLCPP_INFO(this->get_logger(), "Initial pose: (%.3f, %.3f), yaw: %.3f", current_x, current_y, current_yaw);
+            initial_yaw = raw_yaw;
             initialized = true;
+            RCLCPP_INFO(this->get_logger(), "Initial pose: (%.3f, %.3f), yaw: %.3f", current_x, current_y, initial_yaw);
         }
+
+        // Normalize yaw to be relative to initial yaw
+        current_yaw = raw_yaw - initial_yaw;
+
+        // Optional: wrap current_yaw to [-π, π]
+        if (current_yaw > M_PI) current_yaw -= 2 * M_PI;
+        if (current_yaw < -M_PI) current_yaw += 2 * M_PI;
     }
 
     void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
@@ -242,19 +254,32 @@ std::vector<Goal> readWaypointsYAML(int scene_number) {
             vel.linear.y = vy;
             vel.angular.z = wz;
 
-            if (left_range_ < 0.2) {
+            if (left_range_ < 0.19) {
                 vel.linear.y -= 0.05;
                 RCLCPP_INFO(this->get_logger(), "Left too close");
             }
-            if (right_range_ < 0.2) {
+            if (right_range_ < 0.19) {
                 vel.linear.y += 0.05;
                 RCLCPP_INFO(this->get_logger(), "Right too close");
             }
 
             // Early stop if front obstacle is detected
             // Early stop if front obstacle is detected (except for waypoint 3)
-            std::set<std::size_t> skip_early_stop = {3, 5, 9, 11, 12};
-            float front_threshold = 0.22;
+            std::set<std::size_t> skip_early_stop;
+
+            switch (scene_number_) {
+                case 2:
+                    skip_early_stop = {3, 5, 9, 11, 12};
+                    break;
+                case 4:
+                    skip_early_stop = {1, 2, 3, 4, 5, 7, 9, 11, 13};
+                    break;
+                default:
+                    skip_early_stop.clear();
+                    break;
+            }
+            float front_threshold = 0.25;
+
             if (current_goal_index == 13) {
                 front_threshold = 0.18;  // Special case for waypoint 13
             }
