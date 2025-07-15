@@ -129,84 +129,39 @@ private:
         right_up_avg_   = calc_avg(539, 584);
     }
 
-    std::vector<Goal> readWaypointsYAML(int scene_number) {
-        std::vector<Goal> waypoints;
-        std::string package_share_directory = ament_index_cpp::get_package_share_directory("pid_maze_solver");
+std::vector<Goal> readWaypointsYAML(int scene_number) {
+    std::vector<Goal> waypoints;
 
-        std::string waypoint_file_name = scene_number == 1 ? "waypoints_sim.yaml" : "waypoints_real.yaml";
-        std::string yaml_path = package_share_directory + "/waypoints/" + waypoint_file_name;
-        RCLCPP_INFO(this->get_logger(), "Loading waypoints from: %s", yaml_path.c_str());
+    std::string package_share_directory = ament_index_cpp::get_package_share_directory("pid_maze_solver");
+    std::string waypoint_file_name;
 
-        try {
-            YAML::Node config = YAML::LoadFile(yaml_path);
-            if (config["waypoints"]) {
-                for (const auto& wp : config["waypoints"]) {
-                    waypoints.push_back({wp[0].as<float>(), wp[1].as<float>(), wp[2].as<float>()});
-                }
-            }
-        } catch (const YAML::Exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to load YAML: %s", e.what());
-        }
-
-        return waypoints;
+    switch (scene_number) {
+        case 1: waypoint_file_name = "waypoints_sim.yaml"; break;
+        case 2: waypoint_file_name = "waypoints_real.yaml"; break;
+        case 3: waypoint_file_name = "reverse_waypoints_sim.yaml"; break;
+        case 4: waypoint_file_name = "reverse_waypoints_real.yaml"; break;
+        default:
+            RCLCPP_ERROR(this->get_logger(), "Invalid scene number: %d", scene_number);
+            return waypoints;
     }
 
-    std::vector<std::vector<double>> readWaypointsYAML() {
-    std::vector<std::vector<double>> waypoints;
+    std::string yaml_path = package_share_directory + "/waypoints/" + waypoint_file_name;
+    RCLCPP_INFO(this->get_logger(), "Loading waypoints from: %s", yaml_path.c_str());
 
-    // Get the package's share directory and append the YAML file path
-    std::string package_share_directory =
-        ament_index_cpp::get_package_share_directory(
-            "pid_maze_solver"); // Replace with your package name
-
-    std::string waypoint_file_name = "";
-
-    switch (scene_number_) {
-    case 1: // Simulation
-      waypoint_file_name = "waypoints_sim.yaml";
-      break;
-
-    case 2: // CyberWorld
-      waypoint_file_name = "waypoints_real.yaml";
-      break;
-    
-    case 3: // Simulation Reverse
-      waypoint_file_name = "reverse_waypoints_sim.yaml";
-      break;
-
-    case 4: // CyberWorld Reverse
-      waypoint_file_name = "reverse_waypoints_real.yaml";
-      break;
-
-    default:
-      RCLCPP_ERROR(this->get_logger(), "Invalid Scene Number: %d",
-                   scene_number_);
-    }
-
-    RCLCPP_INFO(this->get_logger(), "Waypoint file loaded: %s",
-                waypoint_file_name.c_str());
-
-    std::string yaml_file_path =
-        package_share_directory + "/waypoints/" + waypoint_file_name;
-
-    // Read points from the YAML file
     try {
-      YAML::Node config = YAML::LoadFile(yaml_file_path);
-
+        YAML::Node config = YAML::LoadFile(yaml_path);
         if (config["waypoints"]) {
             for (const auto& wp : config["waypoints"]) {
                 waypoints.push_back({wp[0].as<float>(), wp[1].as<float>(), wp[2].as<float>()});
             }
         }
-
-
-    } catch (const YAML::Exception &e) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to load YAML file: %s",
-                   e.what());
+    } catch (const YAML::Exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to load YAML file: %s", e.what());
     }
 
     return waypoints;
-  }
+}
+
 
 
     double normalizeAngle(double angle) {
@@ -299,9 +254,9 @@ private:
             // Early stop if front obstacle is detected
             // Early stop if front obstacle is detected (except for waypoint 3)
             std::set<std::size_t> skip_early_stop = {3, 5, 9, 11, 12};
-            float front_threshold = 0.25;
+            float front_threshold = 0.22;
             if (current_goal_index == 13) {
-                front_threshold = 0.2;  // Special case for waypoint 13
+                front_threshold = 0.18;  // Special case for waypoint 13
             }
 
             if (skip_early_stop.count(current_goal_index) == 0 && front_range_ < front_threshold) {
@@ -309,7 +264,17 @@ private:
                 geometry_msgs::msg::Twist stop;
                 vel_pub->publish(stop);
                 rclcpp::sleep_for(std::chrono::milliseconds(300));
-                phase = Phase::CORRECTING;
+                if (scene_number_ == 2 || scene_number_ == 4) {
+                    phase = Phase::CORRECTING;
+                } else {
+                    current_goal_index++;
+                    goal_active = false;
+                    integral_x = 0.0;
+                    integral_y = 0.0;
+                    prev_error_x = 0.0;
+                    prev_error_y = 0.0;
+                    phase = Phase::TURNING;
+                }
                 correction_counter_ = 0;
                 return;
             }
@@ -321,7 +286,17 @@ private:
                 geometry_msgs::msg::Twist stop;
                 vel_pub->publish(stop);
                 rclcpp::sleep_for(std::chrono::milliseconds(300));
-                phase = Phase::CORRECTING;
+                if (scene_number_ == 2 || scene_number_ == 4) {
+                    phase = Phase::CORRECTING;
+                } else {
+                    current_goal_index++;
+                    goal_active = false;
+                    integral_x = 0.0;
+                    integral_y = 0.0;
+                    prev_error_x = 0.0;
+                    prev_error_y = 0.0;
+                    phase = Phase::TURNING;
+                }
                 correction_counter_ = 0;
                 return;
             }
