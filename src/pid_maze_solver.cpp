@@ -4,6 +4,9 @@
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <yaml-cpp/yaml.h>
+#include <filesystem>
 #include <vector>
 #include <cmath>
 #include <algorithm>
@@ -11,8 +14,10 @@
 
 class PIDMazeSolver : public rclcpp::Node {
 public:
-    PIDMazeSolver() : Node("pid_maze_solver") {
-        selectWaypoints();
+    PIDMazeSolver(int scene_number)
+        : Node("pid_maze_solver"), scene_number_(scene_number) {
+
+        relative_goals = readWaypointsYAML(scene_number_);
 
         vel_pub = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
 
@@ -35,24 +40,18 @@ private:
         float theta;
     };
 
-    enum class Phase { TURNING, MOVING };
+    enum class Phase { TURNING, MOVING, CORRECTING };
     Phase phase = Phase::TURNING;
 
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr vel_pub;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub;
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub;
-    bool wall_too_close = false;
-
-    float front_range_ = std::numeric_limits<float>::infinity();
-    float left_range_  = std::numeric_limits<float>::infinity();
-    float right_range_ = std::numeric_limits<float>::infinity();
-    float back_range_  = std::numeric_limits<float>::infinity();
-
     rclcpp::TimerBase::SharedPtr timer_;
 
     std::vector<Goal> relative_goals;
     Goal current_target;
 
+    int scene_number_;
     std::size_t current_goal_index = 0;
     bool initialized = false;
     bool goal_active = false;
@@ -62,47 +61,23 @@ private:
 
     double prev_error_x = 0.0, integral_x = 0.0;
     double prev_error_y = 0.0, integral_y = 0.0;
+    double prev_yaw_error = 0.0, integral_yaw = 0.0;
 
-    // PID gains for move
-    float kp = 0.5;
-    float ki = 0.01;
-    float kd = 0.08;
-
-    // PID variables for turning
-    double prev_yaw_error = 0.0;
-    double integral_yaw = 0.0;
-
-    float kp_turn = 1.2;
-    float ki_turn = 0.0;
-    float kd_turn = 0.1;
-
-    // float max_linear_speed = 0.5;
-    double max_linear_speed = 0.5;
+    float kp = 0.5, ki = 0.01, kd = 0.08;
+    float kp_turn = 1.2, ki_turn = 0.0, kd_turn = 0.1;
+    double max_linear_speed = 0.1;
     float goal_tolerance = 0.02;
-    float yaw_tolerance = 0.052;  // ~3 degrees
+    float yaw_tolerance = 0.052;
 
-    double initial_yaw = 0.0;
-
-    void selectWaypoints() {
-        RCLCPP_INFO(this->get_logger(), "Simulation waypoints loaded.");
-        relative_goals = {
-            {0.35, 0.0, 0.0},
-            {0.2, -0.2, -0.785},
-            {0.0, -1.1, -0.785},
-            {0.5, 0.0, 1.57},
-            {0.0, 0.45, 1.57},
-            {0.4, 0.0, 0.0},
-            {0.0, 0.55, 0.0},
-            {0.6, 0.0, 0.0},
-            {0.0, 0.85, 0.0},
-            {-0.5, 0.0, 1.57},
-            {0.0, -0.3, 0.0},
-            {-0.45, 0.0, 0.0},
-            {-0.3, 0.3, -0.785},
-            {-0.6, 0.0, 0.785},
-            {0.0, 0.0, 3.145}
-        };
-    }
+    float front_range_ = std::numeric_limits<float>::infinity();
+    float left_range_  = std::numeric_limits<float>::infinity();
+    float right_range_ = std::numeric_limits<float>::infinity();
+    float back_range_  = std::numeric_limits<float>::infinity();
+    float left_up_avg_ = std::numeric_limits<float>::quiet_NaN();
+    float left_down_avg_ = std::numeric_limits<float>::quiet_NaN();
+    float right_up_avg_ = std::numeric_limits<float>::quiet_NaN();
+    float right_down_avg_ = std::numeric_limits<float>::quiet_NaN();
+    int correction_counter_ = 0;
 
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
         current_x = msg->pose.pose.position.x;
@@ -113,44 +88,125 @@ private:
             msg->pose.pose.orientation.y,
             msg->pose.pose.orientation.z,
             msg->pose.pose.orientation.w);
-        double roll, pitch, raw_yaw;
-        tf2::Matrix3x3(q).getRPY(roll, pitch, raw_yaw);
+        double roll, pitch;
+        tf2::Matrix3x3(q).getRPY(roll, pitch, current_yaw);
 
         if (!initialized) {
-            initial_yaw = raw_yaw;
+            RCLCPP_INFO(this->get_logger(), "Initial pose: (%.3f, %.3f), yaw: %.3f", current_x, current_y, current_yaw);
             initialized = true;
-            RCLCPP_INFO(this->get_logger(), "Initial pose: (%.3f, %.3f), yaw: %.3f", current_x, current_y, initial_yaw);
         }
-        // Normalize yaw to be relative to initial yaw
-        current_yaw = raw_yaw - initial_yaw;
-    
-        // Optional: wrap current_yaw to [-π, π]
-        if (current_yaw > M_PI) current_yaw -= 2 * M_PI;
-        if (current_yaw < -M_PI) current_yaw += 2 * M_PI;
-        
     }
-    void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
-        int total_ranges = static_cast<int>(msg->ranges.size());
 
-        // Compute index helpers
-        auto angleToIndex = [&](float angle_deg) -> int {
-            float angle_rad = angle_deg * M_PI / 180.0;
-            int index = static_cast<int>((angle_rad - msg->angle_min) / msg->angle_increment);
-            return std::clamp(index, 0, total_ranges - 1);
+    void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
+        const auto &ranges = msg->ranges;
+
+        int idx_front = 0;
+        int idx_left = 179;
+        int idx_back = 359;
+        int idx_right = 539;
+        int idx_front_end = 719;
+
+        front_range_ = (ranges[idx_front] + ranges[idx_front_end]) / 2.0;
+        left_range_  = ranges[idx_left];
+        back_range_  = ranges[idx_back];
+        right_range_ = ranges[idx_right];
+
+        auto calc_avg = [&](int start, int end) {
+            float sum = 0.0f;
+            int count = 0;
+            for (int i = start; i <= end && i < static_cast<int>(ranges.size()); ++i) {
+                if (std::isfinite(ranges[i])) {
+                    sum += ranges[i];
+                    count++;
+                }
+            }
+            return count > 0 ? sum / count : std::numeric_limits<float>::quiet_NaN();
         };
 
-        int idx_front = angleToIndex(0.0);
-        int idx_left  = angleToIndex(90.0);
-        int idx_right = angleToIndex(-90.0);
-        int idx_back  = angleToIndex(180.0);
-
-        front_range_ = msg->ranges[idx_front];
-        left_range_  = msg->ranges[idx_left];
-        right_range_ = msg->ranges[idx_right];
-        back_range_  = msg->ranges[idx_back];
-
-        wall_too_close = (front_range_ < 0.4);  // retain if needed elsewhere
+        left_down_avg_ = calc_avg(179, 224);
+        left_up_avg_   = calc_avg(134, 179);
+        right_down_avg_ = calc_avg(484, 539);
+        right_up_avg_   = calc_avg(539, 584);
     }
+
+    std::vector<Goal> readWaypointsYAML(int scene_number) {
+        std::vector<Goal> waypoints;
+        std::string package_share_directory = ament_index_cpp::get_package_share_directory("pid_maze_solver");
+
+        std::string waypoint_file_name = scene_number == 1 ? "waypoints_sim.yaml" : "waypoints_real.yaml";
+        std::string yaml_path = package_share_directory + "/waypoints/" + waypoint_file_name;
+        RCLCPP_INFO(this->get_logger(), "Loading waypoints from: %s", yaml_path.c_str());
+
+        try {
+            YAML::Node config = YAML::LoadFile(yaml_path);
+            if (config["waypoints"]) {
+                for (const auto& wp : config["waypoints"]) {
+                    waypoints.push_back({wp[0].as<float>(), wp[1].as<float>(), wp[2].as<float>()});
+                }
+            }
+        } catch (const YAML::Exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to load YAML: %s", e.what());
+        }
+
+        return waypoints;
+    }
+
+    std::vector<std::vector<double>> readWaypointsYAML() {
+    std::vector<std::vector<double>> waypoints;
+
+    // Get the package's share directory and append the YAML file path
+    std::string package_share_directory =
+        ament_index_cpp::get_package_share_directory(
+            "pid_maze_solver"); // Replace with your package name
+
+    std::string waypoint_file_name = "";
+
+    switch (scene_number_) {
+    case 1: // Simulation
+      waypoint_file_name = "waypoints_sim.yaml";
+      break;
+
+    case 2: // CyberWorld
+      waypoint_file_name = "waypoints_real.yaml";
+      break;
+    
+    case 3: // Simulation Reverse
+      waypoint_file_name = "reverse_waypoints_sim.yaml";
+      break;
+
+    case 4: // CyberWorld Reverse
+      waypoint_file_name = "reverse_waypoints_real.yaml";
+      break;
+
+    default:
+      RCLCPP_ERROR(this->get_logger(), "Invalid Scene Number: %d",
+                   scene_number_);
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Waypoint file loaded: %s",
+                waypoint_file_name.c_str());
+
+    std::string yaml_file_path =
+        package_share_directory + "/waypoints/" + waypoint_file_name;
+
+    // Read points from the YAML file
+    try {
+      YAML::Node config = YAML::LoadFile(yaml_file_path);
+
+        if (config["waypoints"]) {
+            for (const auto& wp : config["waypoints"]) {
+                waypoints.push_back({wp[0].as<float>(), wp[1].as<float>(), wp[2].as<float>()});
+            }
+        }
+
+
+    } catch (const YAML::Exception &e) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to load YAML file: %s",
+                   e.what());
+    }
+
+    return waypoints;
+  }
 
 
     double normalizeAngle(double angle) {
@@ -165,12 +221,6 @@ private:
         double wz = dphi;
         double vx = cos_phi * dx + sin_phi * dy;
         double vy = -sin_phi * dx + cos_phi * dy;
-
-
-
-        // RCLCPP_INFO(this->get_logger(), 
-        // "velocity2twist | yaw: %.3f rad | input dx=%.3f dy=%.3f | output vx=%.3f vy=%.3f wz=%.3f",
-        // current_yaw, dx, dy, vx, vy, wz);
         return {wz, vx, vy};
     }
 
@@ -186,7 +236,6 @@ private:
             current_target = goal;
             goal_active = true;
             phase = Phase::TURNING;
-
             RCLCPP_INFO(this->get_logger(), "New goal #%zu: turn %.3f rad, then move Δx=%.3f, Δy=%.3f",
                         current_goal_index, goal.theta, goal.x, goal.y);
         }
@@ -195,9 +244,8 @@ private:
             double target_yaw = normalizeAngle(start_yaw + goal.theta);
             double yaw_error = normalizeAngle(target_yaw - current_yaw);
 
-            // PID for turning
             integral_yaw += yaw_error;
-            double derivative = (yaw_error - prev_yaw_error) / 0.1;  // assuming 100ms loop
+            double derivative = (yaw_error - prev_yaw_error) / 0.1;
             double angular_z = kp_turn * yaw_error + ki_turn * integral_yaw + kd_turn * derivative;
             angular_z = std::clamp(angular_z, -0.6, 0.6);
 
@@ -206,21 +254,14 @@ private:
                 twist.angular.z = angular_z;
                 vel_pub->publish(twist);
                 prev_yaw_error = yaw_error;
-
-                // RCLCPP_INFO(this->get_logger(),
-                //     "Turning PID | error=%.3f, integral=%.3f, derivative=%.3f, angular_z=%.3f",
-                //     yaw_error, integral_yaw, derivative, angular_z);
                 return;
             }
 
-            RCLCPP_INFO(this->get_logger(), "Turn complete. Starting linear motion.");
             integral_yaw = 0.0;
             prev_yaw_error = 0.0;
-
             phase = Phase::MOVING;
             return;
         }
-
 
         if (phase == Phase::MOVING) {
             double target_x = start_x + goal.x;
@@ -246,66 +287,144 @@ private:
             vel.linear.y = vy;
             vel.angular.z = wz;
 
-            if (left_range_ < 0.17) {
-                RCLCPP_WARN(this->get_logger(), "Left wall too close! Shifting right.");
-                vel.linear.y -= 0.1;  // shift right
+            if (left_range_ < 0.2) {
+                vel.linear.y -= 0.05;
+                RCLCPP_INFO(this->get_logger(), "Left too close");
             }
-            if (front_range_ < 0.17) {
-                RCLCPP_WARN(this->get_logger(), "Front wall too close! Backing up.");
-                vel.linear.x -= 0.1;  // move backward
+            if (right_range_ < 0.2) {
+                vel.linear.y += 0.05;
+                RCLCPP_INFO(this->get_logger(), "Right too close");
             }
-            if (right_range_ < 0.17) {
-                RCLCPP_WARN(this->get_logger(), "Right wall too close! Shifting left.");
-                vel.linear.y += 0.1;  // move left
+
+            // Early stop if front obstacle is detected
+            // Early stop if front obstacle is detected (except for waypoint 3)
+            std::set<std::size_t> skip_early_stop = {3, 5, 9, 11, 12};
+            float front_threshold = 0.25;
+            if (current_goal_index == 13) {
+                front_threshold = 0.2;  // Special case for waypoint 13
             }
-            if (back_range_ < 0.17) {
-                RCLCPP_WARN(this->get_logger(), "Back wall too close! Moving forward.");
-                vel.linear.x += 0.1;
+
+            if (skip_early_stop.count(current_goal_index) == 0 && front_range_ < front_threshold) {
+                RCLCPP_WARN(this->get_logger(), "Front obstacle detected < %.2fm. Stopping early.", front_threshold);
+                geometry_msgs::msg::Twist stop;
+                vel_pub->publish(stop);
+                rclcpp::sleep_for(std::chrono::milliseconds(300));
+                phase = Phase::CORRECTING;
+                correction_counter_ = 0;
+                return;
             }
+
 
             vel_pub->publish(vel);
 
-            RCLCPP_INFO(this->get_logger(), "Published velocity: linear.x = %.3f, linear.y = %.3f", vx, vy);
-            // double target_yaw = start_yaw + goal.theta;
-            // RCLCPP_INFO(this->get_logger(), "Yaw Info | target_yaw: %.3f, start_yaw: %.3f, goal.theta: %.3f",
-            // target_yaw, start_yaw, goal.theta);
-
             if (distance < goal_tolerance) {
-                RCLCPP_INFO(this->get_logger(), "Goal #%zu reached", current_goal_index);
-
                 geometry_msgs::msg::Twist stop;
                 vel_pub->publish(stop);
-                rclcpp::sleep_for(std::chrono::milliseconds(500));
-
-                current_goal_index++;
-                goal_active = false;
-                integral_x = 0.0;
-                integral_y = 0.0;
-                prev_error_x = 0.0;
-                prev_error_y = 0.0;
-
-                if (current_goal_index >= relative_goals.size()) {
-                    vel_pub->publish(stop);
-                    timer_->cancel();
-                    rclcpp::shutdown();
-                }
+                rclcpp::sleep_for(std::chrono::milliseconds(300));
+                phase = Phase::CORRECTING;
+                correction_counter_ = 0;
+                return;
             }
 
             prev_error_x = error_x;
             prev_error_y = error_y;
+            return;
         }
-        // if (wall_too_close) {
-        //     RCLCPP_WARN(this->get_logger(), "Wall too close! Stopping.");
-        //     geometry_msgs::msg::Twist stop;
-        //     vel_pub->publish(stop);
-        //     return;
-        // }
+
+
+        if (phase == Phase::CORRECTING) {
+            geometry_msgs::msg::Twist correction_vel;
+            bool need_correction = false;
+
+            if (front_range_ < 0.16) {
+                correction_vel.linear.x -= 0.03;
+                need_correction = true;
+            }
+            if (left_range_ < 0.2) {
+                correction_vel.linear.y -= 0.03;
+                need_correction = true;
+            }
+            if (right_range_ < 0.2) {
+                correction_vel.linear.y += 0.03;
+                need_correction = true;
+            }
+
+            // === Wall tilt correction based on closer side only ===
+            float tilt_threshold = 0.015;
+            float gain = 1.0;
+
+            // Use only the closer wall for tilt correction
+            if (left_range_ < right_range_) {
+                if (std::isfinite(left_up_avg_) && std::isfinite(left_down_avg_)) {
+                    float diff = left_up_avg_ - left_down_avg_;
+                    if (std::fabs(diff) > tilt_threshold) {
+                        float tilt_correction = std::clamp(-gain * diff, -0.1f, 0.1f);
+                        correction_vel.angular.z += -tilt_correction;
+                        need_correction = true;
+
+                        RCLCPP_INFO(this->get_logger(),
+                            "Left wall tilt correction (closer): diff=%.3f → angular.z += %.3f",
+                            diff, tilt_correction);
+                    }
+                }
+            } else if (right_range_ < left_range_) {
+                if (std::isfinite(right_up_avg_) && std::isfinite(right_down_avg_)) {
+                    float diff = right_up_avg_ - right_down_avg_;
+                    if (std::fabs(diff) > tilt_threshold) {
+                        float tilt_correction = std::clamp(-gain * diff, -0.1f, 0.1f);
+                        correction_vel.angular.z += tilt_correction;
+                        need_correction = true;
+
+                        RCLCPP_INFO(this->get_logger(),
+                            "Right wall tilt correction (closer): diff=%.3f → angular.z += %.3f",
+                            diff, tilt_correction);
+                    }
+                }
+            }
+
+
+            if (need_correction) {
+                vel_pub->publish(correction_vel);
+                correction_counter_++;
+                if (correction_counter_ > 2000) {
+                    RCLCPP_WARN(this->get_logger(), "Correction timeout. Moving on.");
+                    phase = Phase::TURNING;
+                    goal_active = false;
+                    current_goal_index++;
+                }
+                return;
+            }
+
+            geometry_msgs::msg::Twist stop;
+            vel_pub->publish(stop);
+            rclcpp::sleep_for(std::chrono::milliseconds(300));
+
+            current_goal_index++;
+            goal_active = false;
+            integral_x = 0.0;
+            integral_y = 0.0;
+            prev_error_x = 0.0;
+            prev_error_y = 0.0;
+
+            if (current_goal_index >= relative_goals.size()) {
+                vel_pub->publish(stop);
+                timer_->cancel();
+                rclcpp::shutdown();
+            } else {
+                phase = Phase::TURNING;
+            }
+        }
     }
 };
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<PIDMazeSolver>());
+    if (argc < 2) {
+        RCLCPP_ERROR(rclcpp::get_logger("pid_maze_solver"), "Usage: ros2 run pid_maze_solver pid_maze_solver <scene_number>");
+        return 1;
+    }
+    int scene_number = std::atoi(argv[1]);
+    rclcpp::spin(std::make_shared<PIDMazeSolver>(scene_number));
     rclcpp::shutdown();
     return 0;
 }
