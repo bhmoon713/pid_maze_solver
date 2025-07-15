@@ -78,6 +78,7 @@ private:
     float right_up_avg_ = std::numeric_limits<float>::quiet_NaN();
     float right_down_avg_ = std::numeric_limits<float>::quiet_NaN();
     int correction_counter_ = 0;
+    double initial_yaw = 0.0;
 
     double initial_yaw = 0.0;
 
