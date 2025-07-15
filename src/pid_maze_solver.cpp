@@ -78,6 +78,7 @@ private:
     float right_up_avg_ = std::numeric_limits<float>::quiet_NaN();
     float right_down_avg_ = std::numeric_limits<float>::quiet_NaN();
     int correction_counter_ = 0;
+    double initial_yaw = 0.0;
 
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
         current_x = msg->pose.pose.position.x;
@@ -91,10 +92,19 @@ private:
         double roll, pitch;
         tf2::Matrix3x3(q).getRPY(roll, pitch, current_yaw);
 
+        // Capture the first yaw reading as the zero reference
         if (!initialized) {
-            RCLCPP_INFO(this->get_logger(), "Initial pose: (%.3f, %.3f), yaw: %.3f", current_x, current_y, current_yaw);
+            initial_yaw = raw_yaw;
             initialized = true;
+            RCLCPP_INFO(this->get_logger(), "Initial pose: (%.3f, %.3f), yaw: %.3f", current_x, current_y, initial_yaw);
         }
+
+        // Normalize yaw to be relative to initial yaw
+        current_yaw = raw_yaw - initial_yaw;
+
+        // Optional: wrap current_yaw to [-π, π]
+        // if (current_yaw > M_PI) current_yaw -= 2 * M_PI;
+        // if (current_yaw < -M_PI) current_yaw += 2 * M_PI;
     }
 
     void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
