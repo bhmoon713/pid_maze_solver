@@ -6,6 +6,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <set>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tuple>
@@ -196,9 +197,18 @@ private:
   }
 
   void controlLoop() {
-    if (!initialized || current_goal_index >= relative_goals.size())
+    if (!initialized)
       return;
 
+    if (current_goal_index >= relative_goals.size()) {
+      RCLCPP_INFO(this->get_logger(),
+                  "All waypoints completed. Shutting down.");
+      geometry_msgs::msg::Twist stop;
+      vel_pub->publish(stop);
+      timer_->cancel();
+      rclcpp::shutdown();
+      return;
+    }
     const auto &goal = relative_goals[current_goal_index];
 
     if (!goal_active) {
@@ -221,7 +231,7 @@ private:
       double derivative = (yaw_error - prev_yaw_error) / 0.1;
       double angular_z =
           kp_turn * yaw_error + ki_turn * integral_yaw + kd_turn * derivative;
-      angular_z = std::clamp(angular_z, -0.6, 0.6);
+      angular_z = std::clamp(angular_z, -1.0, 1.0);
 
       geometry_msgs::msg::Twist twist;
       if (std::fabs(yaw_error) > yaw_tolerance) {
@@ -297,6 +307,15 @@ private:
           integral_y = 0.0;
           prev_error_x = 0.0;
           prev_error_y = 0.0;
+          if (current_goal_index >= relative_goals.size()) {
+            RCLCPP_INFO(this->get_logger(),
+                        "All waypoints completed. Shutting down.");
+            geometry_msgs::msg::Twist stop;
+            vel_pub->publish(stop);
+            timer_->cancel();
+            rclcpp::shutdown();
+            return;
+          }
           phase = Phase::TURNING;
         }
         correction_counter_ = 0;
