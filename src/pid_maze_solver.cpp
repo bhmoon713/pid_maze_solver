@@ -67,7 +67,7 @@ private:
 
   float kp = 1.2, ki = 0.001, kd = 0.001;
   float kp_turn = 1.2, ki_turn = 0.001, kd_turn = 0.001;
-  double max_linear_speed = 1.0;
+  double max_linear_speed = 0.2;
   float goal_tolerance = 0.02;
   float yaw_tolerance = 0.052;
 
